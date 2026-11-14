@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WAF 规则调试台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3;
+    --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+    --yellow: #d29922; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  main { padding: 16px 20px; max-width: 1500px; margin: 0 auto; }
+  .io { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; }
+  textarea { width: 100%; background: #0a0d12; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 12px; padding: 8px; resize: vertical; }
+  textarea:focus { outline: 1px solid var(--accent); }
+  .cfg { display: flex; gap: 16px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  .cfg label { color: var(--dim); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  .cfg input, .cfg select { background: #0a0d12; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-family: var(--mono); }
+  button { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 16px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  #verdict { margin: 14px 0; padding: 12px 16px; border-radius: 8px; font-size: 15px; font-weight: 600; display: none; }
+  #verdict.block { display: block; background: #3d1215; border: 1px solid var(--red); color: var(--red); }
+  #verdict.pass { display: block; background: #0e2a16; border: 1px solid var(--green); color: var(--green); }
+  #verdict .reason { font-weight: 400; font-size: 13px; margin-left: 10px; color: var(--fg); }
+  .stepnav { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+  .stepnav .pos { color: var(--dim); font-family: var(--mono); font-size: 12px; }
+  .rule { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .rule.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .rule-head { padding: 8px 12px; cursor: pointer; display: flex; gap: 10px; align-items: center; font-family: var(--mono); font-size: 12px; }
+  .rule-head:hover { background: #1c2129; }
+  .badge { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .b-matched { background: #3d1215; color: var(--red); }
+  .b-nomatch { background: #1c2129; color: var(--dim); }
+  .b-skipped { background: #2a2410; color: var(--yellow); }
+  .b-phase { background: #0d2d4d; color: var(--accent); }
+  .b-score { background: #2a1a4d; color: #bc8cff; }
+  .rule-head .raw { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .rule-body { display: none; padding: 4px 12px 12px; border-top: 1px solid var(--border); }
+  .rule.open .rule-body { display: block; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; }
+  td.mono, .mono { font-family: var(--mono); }
+  .val { font-family: var(--mono); word-break: break-all; white-space: pre-wrap; }
+  .tchain { display: flex; flex-direction: column; gap: 2px; }
+  .tstep { font-family: var(--mono); font-size: 11px; }
+  .tstep .tname { color: var(--yellow); }
+  .tstep .tout { color: var(--fg); word-break: break-all; white-space: pre-wrap; }
+  .tstep .arrow { color: var(--dim); }
+  .hit { color: var(--red); font-weight: 700; }
+  .miss { color: var(--dim); }
+  .chain-child { margin-left: 20px; border-left: 2px solid var(--yellow); padding-left: 10px; margin-top: 8px; }
+  .kv { display: grid; grid-template-columns: 220px 1fr; gap: 2px 10px; font-size: 12px; }
+  .kv div:nth-child(odd) { color: var(--dim); font-family: var(--mono); }
+  .kv div:nth-child(even) { font-family: var(--mono); word-break: break-all; }
+  .section { margin-top: 16px; }
+  .err { color: var(--yellow); }
+  .caps { font-family: var(--mono); font-size: 11px; color: #bc8cff; }
+  details { margin: 4px 0; }
+  summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+  #loadstate { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WAF 规则调试台</h1>
+  <span class="sub">SecLang 子集 · Rust → WASM · 全部计算在本地浏览器内完成</span>
+  <span id="loadstate">正在加载 WASM…</span>
+</header>
+<main>
+  <div class="io">
+    <div class="panel">
+      <h3>规则集 (SecLang)</h3>
+      <textarea id="rules" rows="16" spellcheck="false"></textarea>
+    </div>
+    <div class="panel">
+      <h3>原始 HTTP 请求</h3>
+      <textarea id="request" rows="16" spellcheck="false"></textarea>
+    </div>
+  </div>
+  <div class="cfg">
+    <label>模式
+      <select id="mode">
+        <option value="anomaly" selected>异常评分 (Anomaly Scoring)</option>
+        <option value="selfcontained">自包含 (Self-contained / 首中即断)</option>
+      </select>
+    </label>
+    <label>异常阈值 <input id="threshold" type="number" value="5" style="width:70px"></label>
+    <label>REMOTE_ADDR <input id="remote_addr" value="127.0.0.1" style="width:110px"></label>
+    <button class="primary" id="run">运行 (Ctrl+Enter)</button>
+    <button id="example1">SQLi 示例</button>
+    <button id="example2">multipart 示例</button>
+    <button id="example3">畸形请求示例</button>
+  </div>
+
+  <div id="verdict"></div>
+
+  <div id="results" style="display:none">
+    <div class="stepnav">
+      <button id="prev">◀ 上一条</button>
+      <button id="next">下一条 ▶</button>
+      <button id="expandall">全部展开</button>
+      <span class="pos" id="pos"></span>
+    </div>
+    <div id="steps"></div>
+    <div class="section panel">
+      <h3>请求解析结果</h3>
+      <div id="reqinfo"></div>
+    </div>
+    <div class="section panel">
+      <h3>TX 集合(最终状态)</h3>
+      <div id="txinfo"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const DEFAULT_RULES = `# 演示规则集:异常评分 + transform 链 + chain + ctl + capture
+SecRuleEngine On
+
+# 白名单:健康检查路径直接摘掉 100-199 的规则 (ctl 演示)
+SecRule REQUEST_URI "@beginsWith /health" \\
+    "id:900,phase:1,pass,nolog,ctl:ruleRemoveById=100-199"
+
+# SQL 注入:双重解码 + 小写化
+SecRule ARGS "@rx union[\\s\\x0b]+(all[\\s\\x0b]+)?select" \\
+    "id:100,phase:2,block,severity:CRITICAL,msg:'SQLi: UNION SELECT',\\
+     t:none,t:urlDecodeUni,t:htmlEntityDecode,t:lowercase,t:removeNulls,t:compressWhitespace"
+
+SecRule ARGS "@pm fromcharcode exec( information_schema" \\
+    "id:101,phase:2,block,severity:ERROR,msg:'SQLi: 关键字',\\
+     t:urlDecodeUni,t:lowercase,t:cmdLine"
+
+# XSS:实体编码绕过演示
+SecRule ARGS "@rx <script|javascript:|on\\w+\\s*=" \\
+    "id:110,phase:2,block,severity:WARNING,msg:'XSS',\\
+     t:urlDecodeUni,t:htmlEntityDecode,t:lowercase"
+
+# 路径穿越:捕获演示,把捕获值写进 TX
+SecRule ARGS "@rx (\\.\\./){2,}(.*)" \\
+    "id:120,phase:2,block,severity:ERROR,capture,\\
+     msg:'路径穿越: %{tx.0}',setvar:tx.traversal_path=%{tx.2},\\
+     t:urlDecodeUni,t:normalisePathWin"
+
+# chain 演示:必须是 POST 且 body 里带 password= 才算
+SecRule REQUEST_METHOD "@streq POST" \\
+    "id:130,phase:2,block,severity:WARNING,msg:'POST 明文密码提交',chain"
+SecRule REQUEST_BODY "@rx password=.{1,64}" \\
+    "t:none"
+
+# 扫描器 UA
+SecRule REQUEST_HEADERS:User-Agent "@pm sqlmap nikto nmap.wapiti" \\
+    "id:140,phase:1,block,severity:NOTICE,msg:'扫描器 UA',t:lowercase"
+
+# 异常评分阈值判定(贴 CRS 风格)
+SecRule TX:anomaly_score "@ge %{tx.inbound_anomaly_threshold}" \\
+    "id:949,phase:2,deny,msg:'入站异常评分超过阈值: %{tx.anomaly_score}'"
+`;
+
+const DEFAULT_REQUEST = `POST /login?next=%2Fadmin HTTP/1.1
+Host: example.com
+User-Agent: Mozilla/5.0
+Content-Type: application/x-www-form-urlencoded
+Cookie: session=abc123
+
+username=admin&password=%27%20UNION%20SELECT%20password%20FROM%20users--`;
+
+const EXAMPLES = {
+  example1: {
+    req: `GET /search?q=1%25%2535%2533%27%20UNION%20SELECT%20*%20FROM%20users-- HTTP/1.1
+Host: shop.example.com
+User-Agent: sqlmap/1.7
+Accept: */*
+
+`
+  },
+  example2: {
+    req: `POST /upload HTTP/1.1
+Host: example.com
+Content-Type: multipart/form-data; boundary=----WebKit7MA4YWxk
+Content-Length: 420
+
+------WebKit7MA4YWxk
+Content-Disposition: form-data; name="comment"
+
+hello &lt;script&gt;alert(document.cookie)&lt;/script&gt;
+------WebKit7MA4YWxk
+Content-Disposition: form-data; name="avatar"; filename="evil.php"
+Content-Type: application/octet-stream
+
+<?php system($_GET['cmd']); ?>
+------WebKit7MA4YWxk--
+`
+  },
+  example3: {
+    req: `POST /api HTTP/1.1
+Host: example.com
+Transfer-Encoding: chunked
+Content-Type: application/x-www-form-urlencoded
+
+5
+a=1&b
+ZZ
+broken chunk here
+0
+
+`
+  }
+};
+
+let wasm = null;
+let result = null;
+let cursor = -1;
+
+async function loadWasm() {
+  try {
+    const resp = await fetch('waf_debug.wasm');
+    const bytes = await resp.arrayBuffer();
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    wasm = instance.exports;
+    document.getElementById('loadstate').textContent = 'WASM 已加载 ✓';
+  } catch (e) {
+    document.getElementById('loadstate').textContent = 'WASM 加载失败: ' + e.message;
+  }
+}
+
+function engineRun(rules, req, cfg) {
+  const enc = new TextEncoder();
+  const parts = [enc.encode(rules), enc.encode(req), enc.encode(cfg)];
+  const total = 12 + parts.reduce((a, p) => a + p.length, 0);
+  const ptr = wasm.waf_alloc(total);
+  const mem = new DataView(wasm.memory.buffer);
+  let off = ptr;
+  for (const p of parts) {
+    mem.setUint32(off, p.length, true); off += 4;
+    new Uint8Array(wasm.memory.buffer).set(p, off); off += p.length;
+  }
+  const ret = wasm.waf_run(ptr, total);
+  wasm.waf_free(ptr, total);
+  const optr = Number(ret >> 32n), olen = Number(ret & 0xffffffffn);
+  const out = new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, optr, olen));
+  wasm.waf_free(optr, olen);
+  return JSON.parse(out);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderTarget(t) {
+  let tchain = `<div class="tchain">`;
+  tchain += `<div class="tstep"><span class="tname">原始值</span> <span class="arrow">→</span> <span class="tout">${esc(t.value)}</span></div>`;
+  for (const tr of (t.transforms || [])) {
+    if (tr.error) {
+      tchain += `<div class="tstep"><span class="tname">${esc(tr.t)}</span> <span class="arrow">→</span> <span class="err">${esc(tr.error)}</span></div>`;
+    } else {
+      tchain += `<div class="tstep"><span class="tname">${esc(tr.t)}</span> <span class="arrow">→</span> <span class="tout">${esc(tr.out)}</span></div>`;
+    }
+  }
+  tchain += `</div>`;
+  const matched = t.matched ? '<span class="hit">✓ 匹配</span>' : '<span class="miss">✗</span>';
+  let caps = '';
+  if (t.captures && t.captures.length) {
+    caps = `<div class="caps">捕获: ${t.captures.map((c, i) => c === null ? '' : `[${i}]=${esc(c)}`).filter(x=>x).join(' ')}</div>`;
+  }
+  let note = t.note ? `<div class="err">${esc(t.note)}</div>` : '';
+  let matchVal = t.matched && t.match !== undefined ? `<div class="caps">命中串: ${esc(t.match)}</div>` : '';
+  return `<tr>
+    <td class="mono">${esc(t.var)}</td>
+    <td>${tchain}</td>
+    <td class="mono">${esc(t.op)}${note}</td>
+    <td>${matched}${matchVal}${caps}</td>
+  </tr>`;
+}
+
+function renderChain(children) {
+  if (!children || !children.length) return '';
+  let html = '';
+  for (const c of children) {
+    html += `<div class="chain-child">
+      <div class="mono" style="font-size:11px;color:var(--dim)">⛓ 链式子规则 (行 ${c.line}) ${c.matched ? '<span class="hit">✓</span>' : '<span class="miss">✗ 中断</span>'}</div>
+      <table><thead><tr><th>变量</th><th>transform 链</th><th>操作符</th><th>结果</th></tr></thead>
+      <tbody>${(c.targets||[]).map(renderTarget).join('')}</tbody></table>
+      ${renderChain(c.chain)}
+    </div>`;
+  }
+  return html;
+}
+
+function renderStep(s, idx) {
+  if (s.kind === 'marker') {
+    return `<div class="rule" data-idx="${idx}"><div class="rule-head">
+      <span class="badge b-phase">MARKER</span><span class="raw">${esc(s.name)} — ${esc(s.status)}</span></div></div>`;
+  }
+  const statusBadge = s.status === 'matched' ? '<span class="badge b-matched">命中</span>'
+    : s.status === 'skipped' ? '<span class="badge b-skipped">跳过</span>'
+    : '<span class="badge b-nomatch">未命中</span>';
+  const idStr = s.id !== undefined ? `id:${s.id}` : '(无 id)';
+  let score = '';
+  if (s.score_delta) score = `<span class="badge b-score">+${s.score_delta} 分</span>`;
+  let body = '';
+  if (s.status === 'skipped') {
+    body = `<div class="err">跳过原因: ${esc(s.skip_reason || '')}</div>`;
+  } else {
+    if (s.msg) body += `<div style="margin:6px 0">📋 msg: <b>${esc(s.msg)}</b></div>`;
+    if (s.targets && s.targets.length) {
+      body += `<table><thead><tr><th style="width:180px">变量</th><th>transform 链(逐步中间值)</th><th style="width:200px">操作符</th><th style="width:180px">结果</th></tr></thead><tbody>`;
+      body += s.targets.map(renderTarget).join('');
+      body += `</tbody></table>`;
+    } else if (s.kind === 'action') {
+      body += `<div class="miss">SecAction:无条件执行</div>`;
+    }
+    body += renderChain(s.chain);
+    if (s.capture && s.capture.length) {
+      body += `<div class="caps">capture: ${s.capture.map(c => `${esc(c.name)}: "${esc(c.from)}" → "${esc(c.to)}"`).join('; ')}</div>`;
+    }
+    if (s.tx_changes && s.tx_changes.length) {
+      body += `<table><thead><tr><th>TX 变量</th><th>旧值</th><th>新值</th></tr></thead><tbody>`;
+      body += s.tx_changes.map(c => `<tr><td class="mono">${esc(c.name)}</td><td class="mono">${esc(c.from)}</td><td class="mono">${esc(c.to)}</td></tr>`).join('');
+      body += `</tbody></table>`;
+    }
+    if (s.actions_run && s.actions_run.length) {
+      body += `<div class="caps">执行的动作: ${s.actions_run.map(esc).join(' | ')}</div>`;
+    }
+    if (s.unsupported_actions && s.unsupported_actions.length) {
+      body += `<div class="err">不支持的动作(已忽略): ${s.unsupported_actions.map(esc).join(', ')}</div>`;
+    }
+    body += `<div style="color:var(--dim);font-size:11px;margin-top:4px">disruptive: ${esc(s.disruptive || 'pass')}</div>`;
+  }
+  return `<div class="rule" data-idx="${idx}">
+    <div class="rule-head" onclick="toggleRule(${idx})">
+      ${statusBadge}
+      <span class="badge b-phase">phase ${s.phase}</span>
+      <span class="mono">${idStr}</span>
+      ${score}
+      <span class="raw">${esc(s.raw)}</span>
+    </div>
+    <div class="rule-body">${body}</div>
+  </div>`;
+}
+
+function toggleRule(idx) {
+  document.querySelectorAll('.rule')[idx]?.classList.toggle('open');
+}
+
+function setCursor(idx) {
+  const rules = document.querySelectorAll('#steps > .rule');
+  if (!rules.length) return;
+  cursor = Math.max(0, Math.min(idx, rules.length - 1));
+  rules.forEach((r, i) => r.classList.toggle('current', i === cursor));
+  const el = rules[cursor];
+  el.classList.add('open');
+  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  document.getElementById('pos').textContent = `第 ${cursor + 1} / ${rules.length} 条`;
+}
+
+function renderReqInfo(r) {
+  let html = `<div class="kv">
+    <div>方法 / URI</div><div>${esc(r.method)} ${esc(r.uri)} ${esc(r.version)}</div>
+    <div>路径</div><div>${esc(r.path)}</div>
+    <div>查询串</div><div>${esc(r.query)}</div>
+    <div>Body 长度</div><div>${r.body_len}</div>
+  </div>`;
+  if (r.errors && r.errors.length) {
+    html += `<div style="margin-top:6px" class="err">⚠ 解析异常(引擎已容错继续):<br>${r.errors.map(esc).join('<br>')}</div>`;
+  }
+  const table = (title, rows) => {
+    if (!rows || !rows.length) return '';
+    return `<details><summary>${title} (${rows.length})</summary><table>` +
+      rows.map(x => `<tr><td class="mono">${esc(x.name)}</td><td class="val">${esc(x.value)}</td></tr>`).join('') +
+      `</table></details>`;
+  };
+  html += table('请求头', r.headers);
+  html += table('ARGS_GET', r.args_get);
+  html += table('ARGS_POST', r.args_post);
+  html += table('Cookies', r.cookies);
+  if (r.body_preview) {
+    html += `<details><summary>Body 预览</summary><div class="val" style="padding:6px">${esc(r.body_preview)}</div></details>`;
+  }
+  return html;
+}
+
+function run() {
+  if (!wasm) return;
+  const rules = document.getElementById('rules').value;
+  const req = document.getElementById('request').value;
+  const cfg = [
+    'mode=' + document.getElementById('mode').value,
+    'threshold=' + document.getElementById('threshold').value,
+    'remote_addr=' + document.getElementById('remote_addr').value,
+  ].join('\n');
+  try {
+    result = engineRun(rules, req, cfg);
+  } catch (e) {
+    alert('引擎异常: ' + e.message);
+    return;
+  }
+  const v = document.getElementById('verdict');
+  v.className = result.verdict === 'BLOCK' ? 'block' : 'pass';
+  v.innerHTML = `${result.verdict === 'BLOCK' ? '🛡 BLOCK' : '✓ PASS'}<span class="reason">${esc(result.verdict_reason || '')} · 异常评分 ${result.anomaly_score} / 阈值 ${result.threshold} · 引擎 ${esc(result.rule_engine)}</span>`;
+
+  if (result.parse_errors && result.parse_errors.length) {
+    v.innerHTML += `<div class="err" style="font-size:12px;margin-top:6px">规则解析问题:<br>${result.parse_errors.map(esc).join('<br>')}</div>`;
+  }
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('steps').innerHTML = (result.steps || []).map(renderStep).join('');
+  document.getElementById('reqinfo').innerHTML = renderReqInfo(result.request);
+  document.getElementById('txinfo').innerHTML = '<div class="kv">' +
+    Object.entries(result.tx || {}).map(([k, val]) => `<div>tx.${esc(k)}</div><div>${esc(val)}</div>`).join('') +
+    '</div>';
+  if ((result.steps || []).length) setCursor(0);
+}
+
+document.getElementById('run').onclick = run;
+document.getElementById('prev').onclick = () => setCursor(cursor - 1);
+document.getElementById('next').onclick = () => setCursor(cursor + 1);
+document.getElementById('expandall').onclick = () =>
+  document.querySelectorAll('.rule').forEach(r => r.classList.add('open'));
+for (const [id, ex] of Object.entries(EXAMPLES)) {
+  document.getElementById(id).onclick = () => {
+    document.getElementById('request').value = ex.req;
+    run();
+  };
+}
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run();
+  if (e.key === 'ArrowDown' && result) setCursor(cursor + 1);
+  if (e.key === 'ArrowUp' && result) setCursor(cursor - 1);
+});
+
+document.getElementById('rules').value = DEFAULT_RULES;
+document.getElementById('request').value = DEFAULT_REQUEST;
+loadWasm().then(() => { if (wasm) run(); });
+</script>
+</body>
+</html>
